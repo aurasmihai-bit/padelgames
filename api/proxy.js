@@ -4,31 +4,35 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-  
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  const urlObj = new URL(req.url, 'http://localhost');
-  const pathParts = urlObj.pathname.replace('/api/proxy', '').replace(/^\//, '');
-  const qs = urlObj.searchParams.toString();
-  const target = `https://renet.immoflux.ro/api/v1/${pathParts}${qs ? '?' + qs : ''}`;
+  try {
+    const urlObj = new URL(req.url, 'http://localhost');
+    const path = urlObj.searchParams.get('path') || 'properties/';
+    // Remove 'path' from params, keep everything else (token, page, etc.)
+    urlObj.searchParams.delete('path');
+    const qs = urlObj.searchParams.toString();
+    const target = 'https://renet.immoflux.ro/api/v1/' + path + (qs ? '?' + qs : '');
 
-  return new Promise((resolve) => {
-    https.get(target, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Host': 'renet.immoflux.ro' }
-    }, (apiRes) => {
-      let body = '';
-      apiRes.on('data', d => body += d);
-      apiRes.on('end', () => {
-        try {
-          res.status(200).json(JSON.parse(body));
-        } catch(e) {
-          res.status(500).json({ error: 'Parse error', raw: body.substring(0, 200) });
+    const data = await new Promise((resolve, reject) => {
+      https.get(target, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': 'application/json',
+          'Host': 'renet.immoflux.ro'
         }
-        resolve();
-      });
-    }).on('error', (e) => {
-      res.status(500).json({ error: e.message });
-      resolve();
+      }, (r) => {
+        let body = '';
+        r.on('data', d => body += d);
+        r.on('end', () => {
+          try { resolve(JSON.parse(body)); }
+          catch(e) { reject(new Error('Parse: ' + body.slice(0, 100))); }
+        });
+      }).on('error', reject).setTimeout(20000, function() { this.destroy(new Error('Timeout')); });
     });
-  });
+
+    res.status(200).json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 };
